@@ -1012,17 +1012,78 @@ class HanIDE:
         self.update_status()
 
     def on_close(self) -> None:
-        for tab in self.tabs():
+        """프로그램 종료 전 저장되지 않은 모든 파일을 확인한다."""
+
+        tabs = self.tabs()
+
+        for tab in tabs:
             if not tab.dirty:
                 continue
-            self.notebook.select(tab)
-            answer = messagebox.askyesnocancel("저장 확인", f"{tab.title} 파일을 저장할까요?")
+
+            # 현재 확인 중인 탭 선택
+            try:
+                self.notebook.select(tab)
+            except tk.TclError:
+                continue
+
+            answer = messagebox.askyesnocancel(
+                "저장 확인",
+                f"{tab.title} 파일에 저장되지 않은 변경사항이 있습니다.\n\n"
+                "저장하시겠습니까?",
+                parent=self.root
+            )
+
+            # 취소
             if answer is None:
                 return
-            if answer and not self.save_current():
-                return
 
-        self.settings.save()
+            # 예 → 해당 탭을 직접 저장
+            if answer:
+                if tab.path is None:
+                    # 아직 저장되지 않은 새 파일
+                    path = filedialog.asksaveasfilename(
+                        title="파일 저장",
+                        initialdir=self.workspace,
+                        defaultextension=".han",
+                        filetypes=[
+                            ("Han 파일", "*.han"),
+                            ("모든 파일", "*.*"),
+                        ],
+                        parent=self.root,
+                    )
+
+                    # 저장 위치 선택 취소
+                    if not path:
+                        return
+
+                    tab.path = Path(path)
+
+                try:
+                    tab.path.write_text(
+                        tab.content(),
+                        encoding="utf-8"
+                    )
+                except OSError as error:
+                    messagebox.showerror(
+                        "저장 실패",
+                        f"{tab.path}\n\n{error}",
+                        parent=self.root
+                    )
+                    return
+
+                tab.mark_clean()
+
+        # 모든 저장 확인이 끝났으면 설정 저장 후 종료
+        try:
+            self.settings.save()
+        except OSError as error:
+            messagebox.showerror(
+                "설정 저장 실패",
+                str(error),
+                parent=self.root
+            )
+            return
+
         self.root.destroy()
 
     def run(self) -> None:
