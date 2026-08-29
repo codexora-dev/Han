@@ -28,6 +28,9 @@ from tkinter import (
     simpledialog,
     ttk,
 )
+from compiler.codegen.python import PythonCodeGenerator
+from lexer.lexer import Lexer
+from parser.parser import Parser
 
 
 APP_DIR = Path(__file__).resolve()
@@ -122,6 +125,7 @@ class Settings:
     word_wrap: bool = False
     han_root: str = str(DEFAULT_HAN_ROOT)
     first_run: bool = True
+    show_python_code: bool = False
 
     @classmethod
     def load(cls) -> "Settings":
@@ -260,6 +264,7 @@ class EditorTab(ttk.Frame):
             self.text.tag_remove(tag, "1.0", END)
 
         source = self.content()
+        python_code = self.compile_han_source(source)
         self._apply(OPERATOR_PATTERN, "operator", source)
         self._apply(NUMBER_PATTERN, "number", source)
         self._apply(KEYWORD_PATTERN, "keyword", source)
@@ -325,6 +330,7 @@ class SettingsDialog(tk.Toplevel):
         self.size_var = tk.IntVar(value=app.settings.font_size)
         self.line_var = BooleanVar(value=app.settings.show_line_numbers)
         self.wrap_var = BooleanVar(value=app.settings.word_wrap)
+        self.python_var = BooleanVar(value=app.settings.show_python_code)
         self.root_var = tk.StringVar(value=app.settings.han_root)
 
         body = ttk.Frame(self, padding=18)
@@ -343,14 +349,18 @@ class SettingsDialog(tk.Toplevel):
         ttk.Checkbutton(body, text="줄 번호 표시", variable=self.line_var).grid(row=3, column=1, sticky="w", pady=6)
         ttk.Checkbutton(body, text="자동 줄바꿈", variable=self.wrap_var).grid(row=4, column=1, sticky="w", pady=6)
 
-        self._label(body, "Han 폴더", 5)
+        ttk.Checkbutton(body, text="생성된 Python 코드 표시", variable=self.python_var).grid(row=5,column=1,sticky="w",pady=6)
+
+        self._label(body, "Han 폴더", 6)
         root_row = ttk.Frame(body)
-        root_row.grid(row=5, column=1, sticky="ew", pady=6)
+        root_row.grid(row=6, column=1, sticky="ew", pady=6)
         ttk.Entry(root_row, textvariable=self.root_var, width=38).pack(side=LEFT, fill=X, expand=True)
         ttk.Button(root_row, text="찾기", command=self.choose_root).pack(side=RIGHT, padx=(8, 0))
 
+        
+
         buttons = ttk.Frame(body)
-        buttons.grid(row=6, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(16, 0))
         ttk.Button(buttons, text="취소", command=self.destroy).pack(side=RIGHT, padx=(8, 0))
         ttk.Button(buttons, text="적용", command=self.apply).pack(side=RIGHT)
 
@@ -368,6 +378,7 @@ class SettingsDialog(tk.Toplevel):
         self.app.settings.font_size = int(self.size_var.get())
         self.app.settings.show_line_numbers = self.line_var.get()
         self.app.settings.word_wrap = self.wrap_var.get()
+        self.app.settings.show_python_code = self.python_var.get()
         self.app.settings.han_root = self.root_var.get()
         self.app.settings.save()
         self.app.load_workspace(Path(self.app.settings.han_root))
@@ -410,6 +421,8 @@ class HanIDE:
         if self.settings.first_run:
             self.show_welcome_message()
             self.settings.first_run = False
+
+        self.last_python_code = ""
 
 
     def _build_styles(self) -> None:
@@ -1197,6 +1210,97 @@ class HanIDE:
             "\n프로그램을 중지했습니다.\n",
             "error"
         )
+
+    def show_python_code(self, python_code: str) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("생성된 Python 코드")
+        window.geometry("800x600")
+
+        window.transient(self.root)
+
+        frame = ttk.Frame(window, padding=10)
+        frame.pack(fill=BOTH, expand=True)
+
+        text = tk.Text(frame, wrap="none", undo=False, borderwidth=0, highlightthickness=0)
+
+        text.pack(fill=BOTH, expand=True)
+
+        text.insert("1.0", python_code)
+        text.configure(state="disabled")
+
+    def compile_han_source(self, source: str) -> str:
+        """Han 소스 코드를 Python 코드로 변환한다."""
+        lexer = Lexer(source)
+        tokens = lexer.tokenize()
+
+        parser = Parser(tokens)
+        ast = parser.parse()
+
+        generator = PythonCodeGenerator()
+        python_code = generator.generate(ast)
+
+        return python_code
+
+    def show_python_code(self, python_code: str) -> None:
+        window = tk.Toplevel(self.root)
+        window.title("생성된 Python 코드")
+        window.geometry("800x600")
+
+        frame = ttk.Frame(window, padding=10)
+        frame.pack(fill=BOTH, expand=True)
+
+        text = tk.Text(
+            frame,
+            wrap="none",
+            borderwidth=0,
+            highlightthickness=0,
+        )
+
+        text.pack(fill=BOTH, expand=True)
+
+        text.insert("1.0", python_code)
+        text.configure(state="disabled")
+
+    def compile_source_to_python(self, source: str) -> str:
+        tokens = Lexer(source).tokenize()
+        ast = Parser(tokens).parse()
+        return PythonCodeGenerator().generate(ast)
+
+    def show_python_code(self) -> None:
+        tab = self.current_tab()
+
+        if tab is None:
+            return
+
+        source = tab.content()
+
+        try:
+            python_code = self.compile_source_to_python(source)
+        except Exception as error:
+            messagebox.showerror(
+                "컴파일 오류",
+                str(error)
+            )
+            return
+
+        self.last_python_code = python_code
+
+        window = tk.Toplevel(self.root)
+        window.title("생성된 Python 코드")
+        window.geometry("850x650")
+
+        frame = ttk.Frame(window, padding=10)
+        frame.pack(fill=BOTH, expand=True)
+
+        text = tk.Text(
+            frame,
+            wrap="none",
+            font=("Cascadia Mono", 12),
+        )
+        text.pack(fill=BOTH, expand=True)
+
+        text.insert("1.0", python_code)
+        text.configure(state="disabled")
 
     
 if __name__ == "__main__":
