@@ -8,6 +8,12 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import tkinter as tk
 import webbrowser
 from tkinter import (
@@ -264,7 +270,6 @@ class EditorTab(ttk.Frame):
             self.text.tag_remove(tag, "1.0", END)
 
         source = self.content()
-        python_code = self.compile_han_source(source)
         self._apply(OPERATOR_PATTERN, "operator", source)
         self._apply(NUMBER_PATTERN, "number", source)
         self._apply(KEYWORD_PATTERN, "keyword", source)
@@ -458,7 +463,19 @@ class HanIDE:
         menubar.add_cascade(label="실행", menu=run_menu)
 
         view_menu = tk.Menu(menubar, tearoff=False)
-        view_menu.add_command(label="설정", command=self.open_settings)
+
+        view_menu.add_command(
+            label="Python 코드 보기",
+            command=self.show_python_code
+        )
+
+        view_menu.add_separator()
+
+        view_menu.add_command(
+            label="설정",
+            command=self.open_settings
+        )
+
         menubar.add_cascade(label="보기", menu=view_menu)
 
         help_menu = tk.Menu(menubar, tearoff=False)
@@ -476,6 +493,7 @@ class HanIDE:
             ("저장", self.save_current),
             ("컴파일", self.compile_current),
             ("실행(F5)", self.run_current),
+            ("Python 코드", self.show_python_code),
             ("설정", self.open_settings),
             ("보고", self.open_report),
             ("실행 중지", self.stop_process)
@@ -790,6 +808,51 @@ class HanIDE:
 
     def open_settings(self) -> None:
         SettingsDialog(self)
+
+    def compile_source_to_python(self, source: str) -> str:
+        tokens = Lexer(source).tokenize()
+        ast = Parser(tokens).parse()
+        return PythonCodeGenerator().generate(ast)
+
+
+    def show_python_code(self) -> None:
+        tab = self.current_tab()
+
+        if tab is None:
+            return
+
+        source = tab.content()
+
+        try:
+            python_code = self.compile_source_to_python(source)
+        except Exception as error:
+            messagebox.showerror(
+                "컴파일 오류",
+                str(error)
+            )
+            return
+
+        self.last_python_code = python_code
+
+        window = tk.Toplevel(self.root)
+        window.title("생성된 Python 코드")
+        window.geometry("850x650")
+
+        frame = ttk.Frame(window, padding=10)
+        frame.pack(fill=BOTH, expand=True)
+
+        text = tk.Text(
+            frame,
+            wrap="none",
+            borderwidth=0,
+            highlightthickness=0,
+            font=("Cascadia Mono", 12),
+        )
+
+        text.pack(fill=BOTH, expand=True)
+
+        text.insert("1.0", python_code)
+        text.configure(state="disabled")
 
     def clear_console(self) -> None:
         self.console.configure(state="normal")
