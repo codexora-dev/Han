@@ -39,7 +39,7 @@ from lexer.lexer import Lexer
 from parser.parser import Parser
 
 
-APP_DIR = Path(__file__).resolve()
+APP_DIR = Path(__file__).resolve().parent
 DEFAULT_HAN_ROOT = APP_DIR.parent
 SETTINGS_FILE = APP_DIR / "settings.json"
  
