@@ -1,0 +1,7 @@
+Remove-Item -Recurse -Force .\build -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force .\dist -ErrorAction SilentlyContinue
+Remove-Item -Force .\HanIDE.spec -ErrorAction SilentlyContinue
+
+install
+
+pyinstaller --noconfirm --clean --onefile --windowed --name "HanIDE" --icon ".\assets\icon\Han_Logo.ico" --paths "." --collect-submodules compiler --collect-submodules lexer --collect-submodules parser .\IDE\app.py

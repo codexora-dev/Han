@@ -5,12 +5,16 @@ import os
 import threading
 import queue
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -1239,28 +1243,153 @@ class HanIDE:
 
     def compile_current(self) -> None:
         tab = self.current_tab()
-        if tab is None or not self.save_before_run(tab):
+
+        if tab is None:
             return
-        if tab.path.suffix.lower() != ".han":
-            messagebox.showinfo("컴파일", "Han 파일(.han)만 컴파일할 수 있습니다.")
+
+        if tab.path is None:
+            if not self.save_current_as():
+                return
+        elif tab.dirty:
+            if not self.save_current():
+                return
+
+        source = tab.content()
+
+        try:
+            python_code = self.compile_source_to_python(source)
+        except Exception as error:
+            messagebox.showerror(
+                "컴파일 오류",
+                str(error)
+            )
             return
-        self.run_han([str(tab.path)], "컴파일")
+
+        self.last_python_code = python_code
+
+        self.write_console(
+            f"컴파일 성공: {tab.path}\n",
+            "ok"
+        )
 
     def run_current(self) -> None:
         tab = self.current_tab()
-        if tab is None or not self.save_before_run(tab):
-            return
-        if tab.path.suffix.lower() != ".han":
-            messagebox.showinfo("실행", "Han 파일(.han)만 실행할 수 있습니다.")
-            return
-        self.run_han([str(tab.path), "--실행"], "실행")
 
-    def save_before_run(self, tab: EditorTab) -> bool:
+        if tab is None:
+            return
+
+        # 저장되지 않은 파일
         if tab.path is None:
-            return self.save_current_as()
-        if tab.dirty:
-            return self.save_current()
-        return True
+            if not self.save_current_as():
+                return
+
+        # 수정된 파일
+        elif tab.dirty:
+            if not self.save_current():
+                return
+
+        source = tab.content()
+
+        try:
+            python_code = self.compile_source_to_python(source)
+
+        except Exception as error:
+            messagebox.showerror(
+                "컴파일 오류",
+                str(error)
+            )
+            return
+
+        self.last_python_code = python_code
+
+        # Python 실행 파일 찾기
+        if getattr(sys, "frozen", False):
+            candidates = [
+                shutil.which("python"),
+                shutil.which("py"),
+                str(
+                    Path.home()
+                    / "AppData/Local/Programs/Python/Python314/python.exe"
+                ),
+                "C:/Python314/python.exe",
+            ]
+
+            python_executable = next(
+                (
+                    path for path in candidates
+                    if path and Path(path).exists()
+                ),
+                None
+            )
+
+            if python_executable is None:
+                messagebox.showerror(
+                    "Python 실행 오류",
+                    "PC에 설치된 Python을 찾을 수 없습니다."
+                )
+                return
+
+        else:
+            python_executable = sys.executable
+
+        # 실행할 임시 Python 파일
+        temp_dir = self.workspace / ".han_temp"
+
+        try:
+            temp_dir.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+
+            temp_file = temp_dir / "_han_run.py"
+
+            wrapper_code = (
+                "import runpy\n"
+                f"runpy.run_path({str(temp_file)!r}, run_name='__main__')\n"
+                "input('\\n계속하려면 Enter를 누르세요...')\n"
+            )
+
+            temp_file.write_text(
+                python_code,
+                encoding="utf-8"
+            )
+
+            wrapper_file = temp_dir / "_han_wrapper.py"
+
+            wrapper_file.write_text(
+                wrapper_code,
+                encoding="utf-8"
+            )
+
+        except OSError as error:
+            messagebox.showerror(
+                "실행 오류",
+                f"실행 파일을 만들 수 없습니다.\n\n{error}"
+            )
+            return
+
+        try:
+            subprocess.Popen(
+                [
+                    str(python_executable),
+                    "-u",
+                    str(wrapper_file)
+                ],
+                cwd=str(self.workspace),
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+
+        except OSError as error:
+            messagebox.showerror(
+                "실행 실패",
+                str(error)
+            )
+            return
+
+        self.write_console(
+            "프로그램을 실행했습니다.\n",
+            "ok"
+        )
 
     def run_han(
             self,
@@ -1285,8 +1414,31 @@ class HanIDE:
             )
             return
 
+        if getattr(sys, "frozen", False):
+            candidates = [
+                Path(sys.executable).parent / "python.exe",
+                Path(sys.executable).parent.parent / "python.exe",
+                Path.home() / "AppData/Local/Programs/Python/Python314/python.exe",
+                Path("C:/Python314/python.exe"),
+            ]
+
+            python_executable = next(
+                (path for path in candidates if path.exists()),
+                None
+            )
+
+            if python_executable is None:
+                messagebox.showerror(
+                    "Python 실행 오류",
+                    "Python 실행 파일을 찾을 수 없습니다.\n"
+                    "Python이 설치되어 있는지 확인해주세요."
+                )
+                return
+        else:
+            python_executable = Path(sys.executable)
+
         command = [
-            sys.executable,
+            str(python_executable),
             "-u",
             str(han_main),
             *args
@@ -1298,6 +1450,10 @@ class HanIDE:
         )
 
         try:
+            self.write_console(
+                f"Python 실행 경로: {python_executable}\n",
+                "muted"
+            )
             self.process = subprocess.Popen(
                 command,
                 stdin=subprocess.PIPE,
@@ -1322,7 +1478,6 @@ class HanIDE:
         self.console.mark_set("insert", "end-1c")
         self.console.focus_set()
 
-        # 미리 전달할 stdin
         if stdin is not None and self.process.stdin is not None:
             try:
                 self.process.stdin.write(stdin)
@@ -1330,21 +1485,18 @@ class HanIDE:
             except (BrokenPipeError, OSError):
                 pass
 
-        # stdout
         threading.Thread(
             target=self._read_process_output,
             args=(self.process.stdout, "stdout"),
             daemon=True
         ).start()
 
-        # stderr
         threading.Thread(
             target=self._read_process_output,
             args=(self.process.stderr, "stderr"),
             daemon=True
         ).start()
 
-        # 프로세스 종료 감시
         threading.Thread(
             target=self._wait_process,
             args=(self.process,),
@@ -1828,17 +1980,11 @@ class HanIDE:
             while True:
                 stream_type, text = self.output_queue.get_nowait()
 
-                if stream_type == "stderr":
-                   self.write_console(text, "error")
-
-                elif stream_type == "stdout":
+                if stream_type == "stdout":
                     self.write_console(text, "ok")
 
-                    # 프로그램이 출력한 내용은 수정할 수 없도록 하고,
-                    # 출력이 끝난 위치부터 사용자가 입력할 수 있게 한다.
-                    if self.process is not None:
-                        self.console_input_start = self.console.index("end-1c")
-                        self.console.mark_set("insert", self.console_input_start)
+                elif stream_type == "stderr":
+                    self.write_console(text, "error")
 
                 elif stream_type == "process":
                     self.write_console(text, "muted")
@@ -1852,10 +1998,12 @@ class HanIDE:
     def _wait_process(
             self,
             process: subprocess.Popen
-    ) -> None:
+        ) -> None:
 
         returncode = process.wait()
 
+        # stdout/stderr 읽기 스레드가 큐에 넣은 내용을
+        # 먼저 처리할 수 있도록 종료 메시지를 마지막에 넣는다.
         self.output_queue.put(
             (
                 "process",
@@ -1878,6 +2026,27 @@ class HanIDE:
             return
 
         returncode = process.returncode
+
+        # 프로세스 자체는 종료됐지만
+        # stdout/stderr 큐에 남은 데이터가 있을 수 있다.
+        self.root.after(
+            100,
+            self._finish_process,
+            process,
+            returncode
+        )
+
+    def _finish_process(
+            self,
+            process: subprocess.Popen,
+            returncode: int | None
+        ) -> None:
+
+        if self.process is not process:
+            return
+
+        # 남아 있는 stdout/stderr 출력 처리
+        self._process_output_loop()
 
         self.process = None
 
@@ -2016,6 +2185,9 @@ class HanIDE:
             command=save_python_file
         ).pack(side=RIGHT)
 
+def main() -> None:
+    app = HanIDE()
+    app.run()
     
 if __name__ == "__main__":
-    HanIDE().run()
+    main()
