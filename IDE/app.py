@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import queue
 import re
@@ -377,6 +378,8 @@ class SettingsDialog(tk.Toplevel):
         if path:
             self.root_var.set(path)
 
+   
+
     def apply(self) -> None:
         self.app.settings.theme = self.theme_var.get()
         self.app.settings.font_family = self.font_var.get()
@@ -414,6 +417,7 @@ class HanIDE:
         self.process: subprocess.Popen | None = None
         self.output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.console_input_start = "1.0"
+        self.last_python_code = ""
 
         self._build_styles()
         self._build_menu()
@@ -427,7 +431,7 @@ class HanIDE:
             self.show_welcome_message()
             self.settings.first_run = False
 
-        self.last_python_code = ""
+        
 
 
     def _build_styles(self) -> None:
@@ -1335,56 +1339,6 @@ class HanIDE:
             "error"
         )
 
-    def show_python_code(self, python_code: str) -> None:
-        window = tk.Toplevel(self.root)
-        window.title("생성된 Python 코드")
-        window.geometry("800x600")
-
-        window.transient(self.root)
-
-        frame = ttk.Frame(window, padding=10)
-        frame.pack(fill=BOTH, expand=True)
-
-        text = tk.Text(frame, wrap="none", undo=False, borderwidth=0, highlightthickness=0)
-
-        text.pack(fill=BOTH, expand=True)
-
-        text.insert("1.0", python_code)
-        text.configure(state="disabled")
-
-    def compile_han_source(self, source: str) -> str:
-        """Han 소스 코드를 Python 코드로 변환한다."""
-        lexer = Lexer(source)
-        tokens = lexer.tokenize()
-
-        parser = Parser(tokens)
-        ast = parser.parse()
-
-        generator = PythonCodeGenerator()
-        python_code = generator.generate(ast)
-
-        return python_code
-
-    def show_python_code(self, python_code: str) -> None:
-        window = tk.Toplevel(self.root)
-        window.title("생성된 Python 코드")
-        window.geometry("800x600")
-
-        frame = ttk.Frame(window, padding=10)
-        frame.pack(fill=BOTH, expand=True)
-
-        text = tk.Text(
-            frame,
-            wrap="none",
-            borderwidth=0,
-            highlightthickness=0,
-        )
-
-        text.pack(fill=BOTH, expand=True)
-
-        text.insert("1.0", python_code)
-        text.configure(state="disabled")
-
     def compile_source_to_python(self, source: str) -> str:
         tokens = Lexer(source).tokenize()
         ast = Parser(tokens).parse()
@@ -1401,10 +1355,7 @@ class HanIDE:
         try:
             python_code = self.compile_source_to_python(source)
         except Exception as error:
-            messagebox.showerror(
-                "컴파일 오류",
-                str(error)
-            )
+            messagebox.showerror("컴파일 오류", str(error))
             return
 
         self.last_python_code = python_code
@@ -1412,19 +1363,82 @@ class HanIDE:
         window = tk.Toplevel(self.root)
         window.title("생성된 Python 코드")
         window.geometry("850x650")
+        window.transient(self.root)
 
         frame = ttk.Frame(window, padding=10)
         frame.pack(fill=BOTH, expand=True)
 
-        text = tk.Text(
-            frame,
-            wrap="none",
-            font=("Cascadia Mono", 12),
-        )
+        text = tk.Text(frame, wrap="none", undo=False, borderwidth=0, highlightthickness=0, font=("Cascadia Mono",12))
         text.pack(fill=BOTH, expand=True)
 
         text.insert("1.0", python_code)
         text.configure(state="disabled")
+
+        button_frame = ttk.Frame(window, padding=(10,0,10,10))
+        button_frame.pack(fill=X)
+
+        def copy_python_code():
+            try:
+                self.root.clipboard_clear()
+                self.root.clipboard_append(python_code)
+                self.root.update()
+                messagebox.showinfo(
+                    "복사 완료",
+                    "Python 코드가 클립보드에 복사되었습니다.",
+                    parent=window
+                )
+            except tk.TclError as error:
+                messagebox.showerror(
+                    "복사 실패",
+                    str(error),
+                    parent=window
+                )
+
+        def save_python_file():
+            path = filedialog.asksaveasfilename(
+                title="Python 파일로 저장",
+                initialdir=self.workspace,
+                defaultextension=".py",
+                filetypes=[
+                    ("Python 파일", "*.py"),
+                    ("모든 파일", "*.*"),
+                ],
+                parent=window,
+            )
+
+            if not path:
+                return
+
+            try:
+                Path(path).write_text(
+                    python_code,
+                    encoding="utf-8"
+                )
+
+                messagebox.showinfo(
+                    "저장 완료",
+                    f"Python 파일이 저장되었습니다.\n\n{path}",
+                    parent=window
+                )
+
+            except OSError as error:
+                messagebox.showerror(
+                    "저장 실패",
+                    str(error),
+                    parent=window
+                )
+
+        ttk.Button(
+            button_frame,
+            text="Python 코드 복사",
+            command=copy_python_code
+        ).pack(side=RIGHT, padx=(6,0))
+
+        ttk.Button(
+            button_frame,
+            text="Python 파일 저장",
+            command=save_python_file
+        ).pack(side=RIGHT)
 
     
 if __name__ == "__main__":
