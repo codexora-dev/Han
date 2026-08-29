@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import time
 import tkinter as tk
 import webbrowser
 from tkinter import (
@@ -362,6 +363,7 @@ class SettingsDialog(tk.Toplevel):
         root_row.grid(row=6, column=1, sticky="ew", pady=6)
         ttk.Entry(root_row, textvariable=self.root_var, width=38).pack(side=LEFT, fill=X, expand=True)
         ttk.Button(root_row, text="찾기", command=self.choose_root).pack(side=RIGHT, padx=(8, 0))
+        ttk.Button(root_row, text="자동 찾기", command=self.auto_find_han_root).pack(side=RIGHT, padx=(8,0))
 
         
 
@@ -378,7 +380,582 @@ class SettingsDialog(tk.Toplevel):
         if path:
             self.root_var.set(path)
 
-   
+    def auto_find_han_root(self) -> None:
+        progress = tk.Toplevel(self)
+        progress.title("Han 프로젝트 찾기")
+        progress.geometry("560x300")
+        progress.resizable(False, False)
+        progress.transient(self)
+        progress.grab_set()
+
+        frame = ttk.Frame(progress, padding=20)
+        frame.pack(fill=BOTH, expand=True)
+
+        ttk.Label(
+            frame,
+            text="Han 프로젝트를 찾고 있습니다.",
+            font=(self.app.settings.font_family, 11, "bold")
+        ).pack(anchor="w", pady=(0, 12))
+
+        progress_var = tk.DoubleVar(value=0)
+
+        progress_bar = ttk.Progressbar(
+            frame,
+            variable=progress_var,
+            maximum=100,
+            mode="determinate"
+        )
+        progress_bar.pack(fill=X, pady=(0, 8))
+
+        percent_label = ttk.Label(frame, text="검색 준비 중...")
+        percent_label.pack(anchor="e")
+
+        current_label = ttk.Label(
+            frame,
+            text="현재 위치: 검색 준비 중...",
+            wraplength=510
+        )
+        current_label.pack(anchor="w", pady=(10, 4))
+
+        count_label = ttk.Label(
+            frame,
+            text="검색한 폴더: 0개"
+        )
+        count_label.pack(anchor="w", pady=3)
+
+        found_label = ttk.Label(
+            frame,
+            text="발견한 Han 프로젝트: 0개"
+        )
+        found_label.pack(anchor="w", pady=3)
+
+        time_label = ttk.Label(
+            frame,
+            text="경과 시간: 0초"
+        )
+        time_label.pack(anchor="w", pady=3)
+
+        button_frame = ttk.Frame(frame)
+        button_frame.pack(fill=X, pady=(12, 0))
+
+        cancelled = threading.Event()
+
+        def cancel_search():
+            cancelled.set()
+            cancel_button.configure(state="disabled")
+            percent_label.configure(text="검색을 중지하는 중...")
+
+        cancel_button = ttk.Button(
+            button_frame,
+            text="취소",
+            command=cancel_search
+        )
+        cancel_button.pack(side=RIGHT)
+
+        result_queue = queue.Queue()
+
+        def is_han_project(path: str) -> bool:
+            try:
+                entries = set()
+
+                with os.scandir(path) as scanner:
+                    for entry in scanner:
+                        if entry.name in {
+                            "main.py",
+                            "compiler",
+                            "lexer",
+                            "parser"
+                        }:
+                            entries.add(entry.name)
+
+                            if len(entries) == 4:
+                                return True
+
+            except (PermissionError, OSError):
+                pass
+
+            return False
+
+        def get_drives():
+            drives = []
+
+            if os.name == "nt":
+                for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                    path = f"{letter}:\\"
+
+                    try:
+                        if os.path.isdir(path):
+                            drives.append(path)
+                    except OSError:
+                        pass
+            else:
+                drives.append("/")
+
+            return drives
+
+        def search_fast_paths():
+            """
+            일반적으로 Han 프로젝트가 있을 가능성이 높은 곳을
+            먼저 검색한다.
+            """
+
+            candidates = []
+
+            # 현재 프로젝트 위치
+            candidates.append(
+                str(self.app.workspace)
+            )
+
+            # IDE가 들어있는 위치
+            candidates.append(
+                str(Path(__file__).resolve().parent.parent)
+            )
+
+            if os.name == "nt":
+                user = os.environ.get("USERPROFILE")
+
+                if user:
+                    candidates.extend([
+                        user,
+                        os.path.join(user, "Desktop"),
+                        os.path.join(user, "Documents"),
+                        os.path.join(user, "Downloads"),
+                    ])
+
+            checked = set()
+
+            for path in candidates:
+                if cancelled.is_set():
+                    return []
+
+                if not path:
+                    continue
+
+                try:
+                    path = os.path.abspath(path)
+                except OSError:
+                    continue
+
+                if path in checked:
+                    continue
+
+                checked.add(path)
+
+                if os.path.isdir(path):
+                    result_queue.put(
+                        ("path", path)
+                    )
+
+                    if is_han_project(path):
+                        return [Path(path)]
+
+            return []
+
+        def search_directory(
+            root_path: str,
+            found: list,
+            max_depth: int = 8
+        ):
+            """
+            저사양 PC를 위해 os.walk() 대신 scandir 사용.
+            """
+
+            stack = [
+                (root_path, 0)
+            ]
+
+            ignored = {
+                "$Recycle.Bin",
+                "System Volume Information",
+                "Windows",
+                "Program Files",
+                "Program Files (x86)",
+                "ProgramData",
+                "WindowsApps",
+                "AppData",
+                "node_modules",
+                "__pycache__",
+                ".git",
+                ".cache",
+                "Temp",
+                "tmp"
+            }
+
+            scanned = 0
+
+            while stack and not cancelled.is_set():
+
+                current, depth = stack.pop()
+
+                if depth > max_depth:
+                    continue
+
+                try:
+                    with os.scandir(current) as entries:
+
+                        directories = []
+
+                        for entry in entries:
+
+                            if cancelled.is_set():
+                                return
+
+                            try:
+                                if entry.is_dir(follow_symlinks=False):
+                                    name = entry.name
+
+                                    if name in ignored:
+                                        continue
+
+                                    directories.append(
+                                        entry.path
+                                    )
+
+                            except (PermissionError, OSError):
+                                continue
+
+                        scanned += 1
+
+                        if is_han_project(current):
+
+                            path = Path(current)
+
+                            if path not in found:
+                                found.append(path)
+
+                                result_queue.put(
+                                    (
+                                        "found",
+                                        path,
+                                        scanned
+                                    )
+                                )
+
+                                # 하나만 찾으면 충분하므로 즉시 종료
+                                return
+
+                        # 최근 폴더부터 검사
+                        for directory in reversed(directories):
+                            stack.append(
+                                (directory, depth + 1)
+                            )
+
+                        # 너무 자주 GUI에 메시지를 보내지 않음
+                        if scanned % 100 == 0:
+                            result_queue.put(
+                                (
+                                    "progress",
+                                    current,
+                                    scanned
+                                )
+                            )
+
+                except (PermissionError, OSError):
+                    continue
+
+        def search():
+            start_time = time.time()
+            found = []
+
+            # -------------------------------------------------
+            # 1. 빠른 검색
+            # -------------------------------------------------
+
+            result_queue.put(
+                ("status", "자주 사용하는 위치를 먼저 검색하고 있습니다.")
+            )
+
+            found = search_fast_paths()
+
+            if found:
+                result_queue.put(
+                    ("done", found)
+                )
+                return
+
+            if cancelled.is_set():
+                result_queue.put(
+                    ("cancelled", found)
+                )
+                return
+
+            # -------------------------------------------------
+            # 2. 드라이브 검색
+            # -------------------------------------------------
+
+            drives = get_drives()
+
+            result_queue.put(
+                (
+                    "status",
+                    f"{len(drives)}개의 드라이브를 검색합니다."
+                )
+            )
+
+            for drive_index, drive in enumerate(drives):
+
+                if cancelled.is_set():
+                    break
+
+                result_queue.put(
+                    (
+                        "drive",
+                        drive,
+                        drive_index,
+                        len(drives)
+                    )
+                )
+
+                search_directory(
+                    drive,
+                    found,
+                    max_depth=7
+                )
+
+                if found:
+                    break
+
+            if cancelled.is_set():
+                result_queue.put(
+                    ("cancelled", found)
+                )
+            else:
+                result_queue.put(
+                    ("done", found)
+                )
+
+        def format_elapsed(seconds):
+            seconds = int(seconds)
+
+            if seconds < 60:
+                return f"{seconds}초"
+
+            minutes = seconds // 60
+            seconds %= 60
+
+            if minutes < 60:
+                return f"{minutes}분 {seconds}초"
+
+            hours = minutes // 60
+            minutes %= 60
+
+            return f"{hours}시간 {minutes}분"
+
+        start_time = time.time()
+
+        def update_progress():
+
+            try:
+                while True:
+
+                    event = result_queue.get_nowait()
+                    event_type = event[0]
+
+                    if event_type == "status":
+
+                        percent_label.configure(
+                            text=event[1]
+                        )
+
+                    elif event_type == "drive":
+
+                        _, drive, index, total = event
+
+                        percent = (
+                            index / max(total, 1)
+                        ) * 100
+
+                        progress_var.set(percent)
+
+                        percent_label.configure(
+                            text=f"{percent:.0f}%"
+                        )
+
+                        current_label.configure(
+                            text=f"현재 드라이브: {drive}"
+                        )
+
+                    elif event_type == "path":
+
+                        current_label.configure(
+                            text=f"현재 위치: {event[1]}"
+                        )
+
+                    elif event_type == "progress":
+
+                        _, path, scanned = event
+
+                        current_label.configure(
+                            text=f"현재 위치: {path}"
+                        )
+
+                        count_label.configure(
+                            text=f"검색한 폴더: {scanned:,}개"
+                        )
+
+                    elif event_type == "found":
+
+                        _, path, scanned = event
+
+                        found_label.configure(
+                            text="발견한 Han 프로젝트: 1개"
+                        )
+
+                        current_label.configure(
+                            text=f"Han 프로젝트 발견: {path}"
+                        )
+
+                        count_label.configure(
+                            text=f"검색한 폴더: {scanned:,}개"
+                        )
+
+                    elif event_type == "cancelled":
+
+                        projects = event[1]
+
+                        progress.grab_release()
+                        progress.destroy()
+
+                        if projects:
+                            self.select_han_project(projects)
+                        else:
+                            messagebox.showinfo(
+                                "Han 프로젝트 찾기",
+                                "검색을 취소했습니다.",
+                                parent=self
+                            )
+
+                        return
+
+                    elif event_type == "done":
+
+                        projects = event[1]
+
+                        progress_var.set(100)
+                        percent_label.configure(
+                            text="검색 완료"
+                        )
+
+                        elapsed = time.time() - start_time
+
+                        time_label.configure(
+                            text=f"검색 시간: {format_elapsed(elapsed)}"
+                        )
+
+                        progress.grab_release()
+                        progress.destroy()
+
+                        if not projects:
+
+                            messagebox.showwarning(
+                                "Han 프로젝트 찾기",
+                                "Han 프로젝트를 찾지 못했습니다.",
+                                parent=self
+                            )
+
+                            return
+
+                        if len(projects) == 1:
+
+                            self.root_var.set(
+                                str(projects[0])
+                            )
+
+                            messagebox.showinfo(
+                                "Han 프로젝트 찾기",
+                                "Han 프로젝트를 찾았습니다.\n\n"
+                                f"{projects[0]}",
+                                parent=self
+                            )
+
+                        else:
+
+                            self.select_han_project(
+                                projects
+                            )
+
+                        return
+
+            except queue.Empty:
+                pass
+
+            elapsed = time.time() - start_time
+
+            time_label.configure(
+                text=f"경과 시간: {format_elapsed(elapsed)}"
+            )
+
+            if progress.winfo_exists():
+                self.after(
+                    100,
+                    update_progress
+                )
+
+        threading.Thread(
+            target=search,
+            daemon=True
+        ).start()
+
+        self.after(
+            100,
+            update_progress
+        )
+
+    def select_han_project(self, projects: list[Path]) -> None:
+        window = tk.Toplevel(self)
+        window.title("Han 프로젝트 선택")
+        window.geometry("650x400")
+        window.transient(self)
+        window.grab_set()
+
+        frame = ttk.Frame(window, padding=15)
+        frame.pack(fill=BOTH, expand=True)
+
+        ttk.Label(
+            frame,
+            text="여러 개의 Han 프로젝트를 찾았습니다.\n사용할 프로젝트를 선택하세요."
+        ).pack(anchor="w", pady=(0, 10))
+
+        listbox = tk.Listbox(frame)
+        listbox.pack(fill=BOTH, expand=True)
+
+        for project in projects:
+            listbox.insert(END, str(project))
+
+        if projects:
+            listbox.selection_set(0)
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill=X, pady=(10, 0))
+
+        def select() -> None:
+            selection = listbox.curselection()
+
+            if not selection:
+                messagebox.showwarning(
+                    "프로젝트 선택",
+                    "Han 프로젝트를 선택하세요.",
+                    parent=window
+                )
+                return
+
+            selected = projects[selection[0]]
+            self.root_var.set(str(selected))
+            window.destroy()
+
+        ttk.Button(
+            buttons,
+            text="취소",
+            command=window.destroy
+        ).pack(side=RIGHT, padx=(8, 0))
+
+        ttk.Button(
+            buttons,
+            text="선택",
+            command=select
+        ).pack(side=RIGHT)
+
+
 
     def apply(self) -> None:
         self.app.settings.theme = self.theme_var.get()
