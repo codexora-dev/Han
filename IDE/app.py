@@ -900,7 +900,6 @@ class SettingsDialog(tk.Toplevel):
             100,
             update_progress
         )
-
     def select_han_project(self, projects: list[Path]) -> None:
         window = tk.Toplevel(self)
         window.title("Han 프로젝트 선택")
