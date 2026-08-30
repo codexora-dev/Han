@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -999,6 +1000,7 @@ class HanIDE:
         self.output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.console_input_start = "1.0"
         self.last_python_code = ""
+        self.console_input_queue: queue.Queue[str] | None = None
 
         self.mode = "텍스트 코딩"
 
@@ -1286,12 +1288,9 @@ class HanIDE:
         if tab is None:
             return
 
-        # 저장되지 않은 파일
         if tab.path is None:
             if not self.save_current_as():
                 return
-
-        # 수정된 파일
         elif tab.dirty:
             if not self.save_current():
                 return
@@ -1300,108 +1299,74 @@ class HanIDE:
 
         try:
             python_code = self.compile_source_to_python(source)
-
         except HanError as error:
-            self.write_console(
-                error.format() + "\n",
-                "error"
-            )
+            self.write_console(error.format() + "\n", "error")
             return
-
         except Exception as error:
-            self.write_console(
-                f"Han 내부 오류: {error}\n",
-                "error"
-            )
+            self.write_console(f"Han 내부 오류: {error}\n", "error")
             return
+
         self.last_python_code = python_code
+        self.current_run_source = source
+        self.console_input_queue = queue.Queue()
 
-        # Python 실행 파일 찾기
-        if getattr(sys, "frozen", False):
-            candidates = [
-                shutil.which("python"),
-                shutil.which("py"),
-                str(
-                    Path.home()
-                    / "AppData/Local/Programs/Python/Python314/python.exe"
-                ),
-                "C:/Python314/python.exe",
-            ]
-
-            python_executable = next(
-                (
-                    path for path in candidates
-                    if path and Path(path).exists()
-                ),
-                None
-            )
-
-            if python_executable is None:
-                messagebox.showerror(
-                    "Python 실행 오류",
-                    "PC에 설치된 Python을 찾을 수 없습니다."
-                )
-                return
-
-        else:
-            python_executable = sys.executable
-
-        # 실행할 임시 Python 파일
-        temp_dir = self.workspace / ".han_temp"
+        self.clear_console()
+        self.console.configure(state="normal")
+        self.console.insert(END, "터미널에서 실행 중...\n", "muted")
+        self.console.configure(state="disabled")
+        self.console_input_start = self.console.index("end-1c")
 
         try:
-            temp_dir.mkdir(
-                parents=True,
-                exist_ok=True
+            creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            runtime_code = (
+                "import os, sys, threading, traceback\n"
+                "def _han_run():\n"
+                "    try:\n"
+                f"        exec(compile({python_code!r}, '<han>', 'exec'), {{'__name__': '__main__'}})\n"
+                "    except BaseException:\n"
+                "        traceback.print_exc()\n"
+                "_han_thread = threading.Thread(target=_han_run, daemon=True)\n"
+                "_han_thread.start()\n"
+                "_han_thread.join(30)\n"
+                "if _han_thread.is_alive():\n"
+                "    print('오류: 실행 시간이 너무 오래 걸렸습니다. 프로그램을 종료합니다.', file=sys.stderr, flush=True)\n"
+                "    raise SystemExit(1)\n"
+                "input('\\n실행이 종료되었습니다. Enter 키를 누르면 창이 닫힙니다.')\n"
+                "sys.stdout.flush()\n"
+                "os._exit(0)\n"
             )
-
-            temp_file = temp_dir / "_han_run.py"
-
-            wrapper_code = (
-                "import runpy\n"
-                f"runpy.run_path({str(temp_file)!r}, run_name='__main__')\n"
-                "input('\\n계속하려면 Enter를 누르세요...')\n"
+            self.process = subprocess.Popen(
+                [sys.executable, "-u", "-c", runtime_code],
+                creationflags=creation_flags,
             )
-
-            temp_file.write_text(
-                python_code,
-                encoding="utf-8"
-            )
-
-            self.current_run_source = source
-            self.current_run_file = temp_file
-
-            wrapper_file = temp_dir / "_han_wrapper.py"
-
-            wrapper_file.write_text(
-                wrapper_code,
-                encoding="utf-8"
-            )
-
-        except OSError as error:
-            messagebox.showerror(
-                "실행 오류",
-                f"실행 파일을 만들 수 없습니다.\n\n{error}"
-            )
+        except Exception as error:
+            self.console.configure(state="normal")
+            self.console.insert(END, f"\n실행 시작 실패: {error}\n", "error")
+            self.console.configure(state="disabled")
+            self.process = None
             return
 
-        try:
-            subprocess.Popen(
-                [
-                    str(python_executable),
-                    "-u",
-                    str(wrapper_file)
-                ],
-                cwd=str(self.workspace),
-                creationflags=subprocess.CREATE_NEW_CONSOLE,
-            )
+        process = self.process
 
-        except OSError as error:
-            messagebox.showerror(
-                "실행 실패",
-                str(error)
-            )
-            return
+        def watch_process() -> None:
+            try:
+                process.wait()
+            finally:
+                if self.process is process and process.poll() is not None:
+                    self.root.after(0, self._finalize_console_run)
+                    self.process = None
+
+        threading.Thread(target=watch_process, daemon=True).start()
+
+    def _finalize_console_run(self) -> None:
+        self.console_input_queue = None
+        self.process = None
+        self.console.configure(state="normal")
+        self.console.insert(END, "\n실행 종료\n", "muted")
+        self.console.configure(state="disabled")
+        self.console_input_start = self.console.index("end-1c")
+        self.console.mark_set("insert", self.console_input_start)
+        self.console.see(END)
 
     def run_han(self) -> None:
         source = self.editor.get("1.0", END)
@@ -1904,7 +1869,7 @@ class HanIDE:
         return None
 
     def _console_enter(self, event=None):
-        if self.process is None:
+        if self.process is None and self.console_input_queue is None:
             return "break"
 
         try:
@@ -1913,15 +1878,15 @@ class HanIDE:
                 "end-1c"
             )
 
-            # 사용자가 입력한 내용을 확정
             self.console.insert("end", "\n")
 
-            if self.process.stdin is not None:
+            if self.console_input_queue is not None:
+                self.console_input_queue.put(user_input)
+            elif self.process is not None and getattr(self.process, "stdin", None) is not None:
                 self.process.stdin.write(user_input + "\n")
                 self.process.stdin.flush()
 
             self.console_input_start = self.console.index("end-1c")
-
             self.console.mark_set("insert", self.console_input_start)
             self.console.see("end")
 
@@ -2128,7 +2093,7 @@ class HanIDE:
         self.process = None
 
         try:
-            if process.stdin is not None:
+            if isinstance(process, subprocess.Popen) and process.stdin is not None:
                 process.stdin.close()
         except OSError:
             pass
