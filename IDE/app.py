@@ -21,6 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import time
 import tkinter as tk
+from errors import HanError
 import webbrowser
 from tkinter import (
     BOTH,
@@ -1104,7 +1105,9 @@ class HanIDE:
         console_top = ttk.Frame(console_frame)
         console_top.pack(side=TOP, fill=X)
 
-        ttk.Label(console_top, text="콘솔", padding=(10,6)).pack(side=LEFT)
+        ttk.Label(console_top, text="콘솔", padding=(10, 6)).pack(side=LEFT)
+
+        ttk.Button(console_top, text="오류 복사", command=self.copy_error).pack(side=RIGHT, padx=(0, 8), pady=5)
 
         ttk.Button(console_top, text="지우기", command=self.clear_console).pack(side=RIGHT, padx=8, pady=5)
 
@@ -1258,10 +1261,10 @@ class HanIDE:
 
         try:
             python_code = self.compile_source_to_python(source)
-        except Exception as error:
-            messagebox.showerror(
-                "컴파일 오류",
-                str(error)
+        except HanError as error:
+            self.write_console(
+                f"Han 내부 오류: {error}\n",
+                "error"
             )
             return
 
@@ -1293,13 +1296,19 @@ class HanIDE:
         try:
             python_code = self.compile_source_to_python(source)
 
-        except Exception as error:
-            messagebox.showerror(
-                "컴파일 오류",
-                str(error)
+        except HanError as error:
+            self.write_console(
+                error.format() + "\n",
+                "error"
             )
             return
 
+        except Exception as error:
+            self.write_console(
+                f"Han 내부 오류: {error}\n",
+                "error"
+            )
+            return
         self.last_python_code = python_code
 
         # Python 실행 파일 찾기
@@ -1557,10 +1566,18 @@ class HanIDE:
 
         try:
             python_code = self.compile_source_to_python(source)
+
+        except HanError as error:
+            self.write_console(
+                error.format() + "\n",
+                "error"
+            )
+            return
+
         except Exception as error:
-            messagebox.showerror(
-                "컴파일 오류",
-                str(error)
+            self.write_console(
+                f"Han 내부 오류: {error}\n",
+                "error"
             )
             return
 
