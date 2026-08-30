@@ -21,7 +21,6 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import time
 import tkinter as tk
-from errors import HanError
 import webbrowser
 from tkinter import (
     BOTH,
@@ -44,6 +43,7 @@ from tkinter import (
 from compiler.codegen.python import PythonCodeGenerator
 from lexer.lexer import Lexer
 from parser.parser import Parser
+from errors import HanError
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -1363,6 +1363,9 @@ class HanIDE:
                 encoding="utf-8"
             )
 
+            self.current_run_source = source
+            self.current_run_file = temp_file
+
             wrapper_file = temp_dir / "_han_wrapper.py"
 
             wrapper_file.write_text(
@@ -1925,6 +1928,76 @@ class HanIDE:
             except Exception:
                 pass
 
+    def convert_python_error(self, text: str) -> str:
+        if not text.strip():
+            return ""
+
+        source = getattr(self, "current_run_source", "")
+        source_lines = source.splitlines()
+
+        match = re.search(
+            r'File ".*?_han_run\.py", line (\d+)',
+            text
+        )
+
+        error_match = re.search(
+            r"([A-Za-z]+Error): (.+)",
+            text
+        )
+
+        if match and error_match:
+            line = int(match.group(1))
+            error_type = error_match.group(1)
+            raw_message = error_match.group(2)
+
+            source_line = (
+                source_lines[line - 1]
+                if 1 <= line <= len(source_lines)
+                else None
+            )
+
+            from errors import translate_python_error
+
+            title, solution = translate_python_error(
+                error_type,
+                raw_message
+            )
+
+            return (
+                "┌────────────────────────────────────────\n"
+                "│ Han 오류\n"
+                "├────────────────────────────────────────\n"
+                "│ 오류 코드: H4000\n"
+                "│ 오류 종류: 실행 오류\n"
+                f"│ 세부 유형: {error_type}\n"
+                f"│ 위치: {line}행\n"
+                "│\n"
+                f"│ {line} │ {source_line or ''}\n"
+                "│\n"
+                f"│ {title}\n"
+                f"│ {raw_message}\n"
+                "│\n"
+                f"│ 해결 방법: {solution}\n"
+                "│\n"
+                "│ 이 오류 메시지를 복사하여 Han 커뮤니티에\n"
+                "│ 질문하면 문제 해결에 도움을 받을 수 있습니다.\n"
+                "└────────────────────────────────────────\n"
+            )
+
+        return (
+            "┌────────────────────────────────────────\n"
+            "│ Han 오류\n"
+            "├────────────────────────────────────────\n"
+            "│ 오류 코드: H4000\n"
+            "│ 오류 종류: 실행 오류\n"
+            "│\n"
+            f"│ {text.strip()}\n"
+            "│\n"
+            "│ 이 오류 메시지를 복사하여 Han 커뮤니티에\n"
+            "│ 질문하면 문제 해결에 도움을 받을 수 있습니다.\n"
+            "└────────────────────────────────────────\n"
+        )
+
     def _process_output_loop(self) -> None:
         try:
             while True:
@@ -1934,7 +2007,7 @@ class HanIDE:
                     self.write_console(text, "ok")
 
                 elif stream_type == "stderr":
-                    self.write_console(text, "error")
+                    self.write_console(self.convert_python_error(text),"error")
 
                 elif stream_type == "process":
                     self.write_console(text, "muted")
@@ -1999,6 +2072,9 @@ class HanIDE:
         self._process_output_loop()
 
         self.process = None
+
+        self.current_run_source = ""
+        self.current_run_file = None
 
         self.console.configure(state="disabled")
         self.console_input_start = self.console.index("end-1c")
