@@ -1000,6 +1000,8 @@ class HanIDE:
         self.console_input_start = "1.0"
         self.last_python_code = ""
 
+        self.mode = "텍스트 코딩"
+
         self._build_styles()
         self._build_menu()
         self._build_layout()
@@ -1085,6 +1087,9 @@ class HanIDE:
         ]:
 
             ttk.Button(self.toolbar, text = label, command=command).pack(side=LEFT,padx=(0,6))
+
+        self.mode_button = ttk.Button(self.toolbar,text="텍스트 모드", command=self.toggle_mode)
+        self.mode_button.pack(side=LEFT, padx=(0,6))
 
         self.main_pane = ttk.PanedWindow(self.root, orient=HORIZONTAL)
         self.main_pane.pack(side=TOP, fill=BOTH, expand=True)
@@ -1275,6 +1280,38 @@ class HanIDE:
             "ok"
         )
 
+    def toggle_mode(self) -> None:
+        if self.mode == "텍스트 코딩":
+            self.mode = "블록 코딩"
+            self.mode_button.configure(text="텍스트 모드")
+            self.show_block_mode()
+        else:
+            self.mode = "텍스트 코딩"
+            self.mode_button.configure(text="블록 모드")
+            self.show_text_mode()
+
+    def show_text_mode(self) -> None:
+        self.notebook.pack_forget()
+
+        self.notebook.pack(fill=BOTH, exapand=True)
+
+        self.update_status()
+
+    def show_block_mode(self) -> None:
+        tab = self.current_tab()
+
+        if tab is None:
+            return
+
+        messagebox.showinfo(
+            "블록 코딩",
+            "블록 코딩 모드는 현재 개발 중입니다."
+        )
+
+        self.mode = "텍스트 코딩"
+        self.mode_var.set("텍스트 코딩")
+        self.show_text_mode()
+    
     def run_current(self) -> None:
         tab = self.current_tab()
 
@@ -1543,6 +1580,16 @@ class HanIDE:
         self.console.configure(state="normal")
         self.console.delete("1.0", END)
         self.console.configure(state="disabled")
+
+    def copy_error(self) -> None:
+        text = self.console.get("1.0", END).strip()
+
+        if not text:
+            return
+
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.root.update()
 
     def write_console(
             self,
