@@ -44,6 +44,7 @@ from compiler.codegen.python import PythonCodeGenerator
 from lexer.lexer import Lexer
 from parser.parser import Parser
 from errors import HanError
+from block_editor import BlockEditor
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -1001,6 +1002,7 @@ class HanIDE:
         self.last_python_code = ""
 
         self.mode = "텍스트 코딩"
+        self.block_editor = None
 
         self._build_styles()
         self._build_menu()
@@ -1088,7 +1090,7 @@ class HanIDE:
 
             ttk.Button(self.toolbar, text = label, command=command).pack(side=LEFT,padx=(0,6))
 
-        self.mode_button = ttk.Button(self.toolbar,text="텍스트 모드", command=self.toggle_mode)
+        self.mode_button = ttk.Button(self.toolbar,text="블록 모드", command=self.toggle_mode)
         self.mode_button.pack(side=LEFT, padx=(0,6))
 
         self.main_pane = ttk.PanedWindow(self.root, orient=HORIZONTAL)
@@ -1099,6 +1101,9 @@ class HanIDE:
 
         self.notebook = ttk.Notebook(self.editor_pane)
         self.editor_pane.add(self.notebook, weight=5)
+
+        self.block_editor = BlockEditor(self.editor_pane, self)
+        self.block_editor.pack_forget()
 
         self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.update_status())
 
@@ -1281,36 +1286,54 @@ class HanIDE:
         )
 
     def toggle_mode(self) -> None:
-        if self.mode == "텍스트 코딩":
-            self.mode = "블록 코딩"
-            self.mode_button.configure(text="텍스트 모드")
-            self.show_block_mode()
-        else:
-            self.mode = "텍스트 코딩"
-            self.mode_button.configure(text="블록 모드")
-            self.show_text_mode()
-
-    def show_text_mode(self) -> None:
-        self.notebook.pack_forget()
-
-        self.notebook.pack(fill=BOTH, exapand=True)
-
-        self.update_status()
-
-    def show_block_mode(self) -> None:
         tab = self.current_tab()
 
         if tab is None:
             return
 
-        messagebox.showinfo(
-            "블록 코딩",
-            "블록 코딩 모드는 현재 개발 중입니다."
-        )
+        if self.mode == "텍스트 코딩":
+            source = tab.content()
 
-        self.mode = "텍스트 코딩"
-        self.mode_var.set("텍스트 코딩")
-        self.show_text_mode()
+            try:
+                self.block_editor.load_han(source)
+
+            except Exception as error:
+                self.write_console(
+                    f"블록 변환 오류: {error}\n",
+                    "error"
+                )
+                return
+
+            self.notebook.pack_forget()
+            self.block_editor.pack(
+                fill=BOTH,
+                expand=True
+            )
+
+            self.mode = "블록 코딩"
+            self.mode_button.configure(
+                text="텍스트 모드"
+            )
+
+        else:
+            source = self.block_editor.to_han()
+
+            tab.text.delete("1.0", END)
+            tab.text.insert("1.0", source)
+            tab.mark_clean()
+
+            self.block_editor.pack_forget()
+            self.notebook.pack(
+                fill=BOTH,
+                expand=True
+            )
+
+            self.mode = "텍스트 코딩"
+            self.mode_button.configure(
+                text="블록 모드"
+            )
+
+        self.update_status()
     
     def run_current(self) -> None:
         tab = self.current_tab()
