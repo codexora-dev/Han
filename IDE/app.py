@@ -1400,119 +1400,52 @@ class HanIDE:
             "ok"
         )
 
-    def run_han(
-            self,
-            args: list[str],
-            title: str,
-            stdin: str | None = None
-        ) -> None:
+    def run_han(self) -> None:
+        source = self.editor.get("1.0", END)
 
-        if self.process is not None:
-            self.write_console(
-                "이미 실행 중인 프로그램이 있습니다.\n",
-                "error"
-            )
+        if not source.strip():
+            self.write_console("실행할 코드가 없습니다.\n", "error")
             return
 
-        han_main = self.workspace / "main.py"
-
-        if not han_main.exists():
-            messagebox.showerror(
-                "Han 경로 오류",
-                f"Han 프로젝트를 찾을 수 없습니다.\n{self.workspace}"
-            )
-            return
-
-        if getattr(sys, "frozen", False):
-            candidates = [
-                Path(sys.executable).parent / "python.exe",
-                Path(sys.executable).parent.parent / "python.exe",
-                Path.home() / "AppData/Local/Programs/Python/Python314/python.exe",
-                Path("C:/Python314/python.exe"),
-            ]
-
-            python_executable = next(
-                (path for path in candidates if path.exists()),
-                None
-            )
-
-            if python_executable is None:
-                messagebox.showerror(
-                    "Python 실행 오류",
-                    "Python 실행 파일을 찾을 수 없습니다.\n"
-                    "Python이 설치되어 있는지 확인해주세요."
-                )
-                return
-        else:
-            python_executable = Path(sys.executable)
-
-        command = [
-            str(python_executable),
-            "-u",
-            str(han_main),
-            *args
-        ]
-
-        self.write_console(
-            f"\n[{title}] {' '.join(command)}\n",
-            "muted"
-        )
+        self.clear_console()
 
         try:
-            self.write_console(
-                f"Python 실행 경로: {python_executable}\n",
-                "muted"
-            )
-            self.process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding="utf-8",
-                cwd=self.workspace,
-                bufsize=0,
-            )
+            python_code = self.compile_source_to_python(source)
 
-        except OSError as error:
-            self.process = None
+        except HanError as error:
             self.write_console(
-                f"실행 실패: {error}\n",
+                error.format() + "\n",
                 "error"
             )
             return
 
-        self.console.configure(state="normal")
-        self.console_input_start = self.console.index("end-1c")
-        self.console.mark_set("insert", "end-1c")
-        self.console.focus_set()
+        except Exception as error:
+            self.write_console(
+                f"Han 내부 오류: {error}\n",
+                "error"
+            )
+            return
 
-        if stdin is not None and self.process.stdin is not None:
-            try:
-                self.process.stdin.write(stdin)
-                self.process.stdin.flush()
-            except (BrokenPipeError, OSError):
-                pass
+        self.write_console("실행 중...\n", "info")
 
-        threading.Thread(
-            target=self._read_process_output,
-            args=(self.process.stdout, "stdout"),
-            daemon=True
-        ).start()
+        try:
+            namespace = {
+                "__name__": "__main__"
+            }
 
-        threading.Thread(
-            target=self._read_process_output,
-            args=(self.process.stderr, "stderr"),
-            daemon=True
-        ).start()
+            exec(python_code, namespace)
 
-        threading.Thread(
-            target=self._wait_process,
-            args=(self.process,),
-            daemon=True
-        ).start()
+        except HanError as error:
+            self.write_console(
+                error.format() + "\n",
+                "error"
+            )
 
-        self.root.after(50, self._process_output_loop)
+        except Exception as error:
+            self.write_console(
+                f"실행 오류: {error}\n",
+                "error"
+            )
 
 
     def find_text(self) -> None:
