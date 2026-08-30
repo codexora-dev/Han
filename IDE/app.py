@@ -45,6 +45,7 @@ from compiler.codegen.python import PythonCodeGenerator
 from lexer.lexer import Lexer
 from parser.parser import Parser
 from errors import HanError
+from learn.learning_app import open_learning_window
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -1068,6 +1069,8 @@ class HanIDE:
         menubar.add_cascade(label="보기", menu=view_menu)
 
         help_menu = tk.Menu(menubar, tearoff=False)
+        help_menu.add_command(label="Han 배우기", command=self.open_learning)
+        help_menu.add_separator()
         help_menu.add_command(label="보고", command=self.open_report)
         help_menu.add_command(label="Han IDE 정보", command = self.show_about)
         menubar.add_cascade(label="도움말", menu=help_menu)
@@ -1083,6 +1086,7 @@ class HanIDE:
             ("컴파일", self.compile_current),
             ("실행(F5)", self.run_current),
             ("Python 코드", self.show_python_code),
+            ("Han 배우기", self.open_learning),
             ("설정", self.open_settings),
             ("보고", self.open_report),
             ("실행 중지", self.stop_process)
@@ -1170,21 +1174,21 @@ class HanIDE:
         self.update_status()
 
     def open_start_file(self) -> None:
-        start = self.workspace / "examples" / "hello.han"
-        if start.exists():
-            self.open_file(start)
-        else:
-            self.new_file()
+        self.new_file()
 
     def load_workspace(self, path: Path) -> None:
         self.workspace = path
         self.settings.han_root = str(path)
 
-    def new_file(self) -> None:
+    def new_file(self) -> EditorTab:
         tab = EditorTab(self.notebook, self)
         self.notebook.add(tab, text=tab.title)
         self.notebook.select(tab)
         tab.text.focus_set()
+        return tab
+
+    def open_learning(self) -> None:
+        open_learning_window(self)
 
     def open_file_dialog(self) -> None:
         path = filedialog.askopenfilename(

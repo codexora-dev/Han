@@ -15,6 +15,8 @@ a = Analysis(
     binaries=[],
     datas=[
         ("assets", "assets"),
+        ("examples", "examples"),
+        ("learn/README.md", "learn"),
     ],
     hiddenimports=hiddenimports,
     hookspath=[],
