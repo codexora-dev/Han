@@ -44,7 +44,6 @@ from compiler.codegen.python import PythonCodeGenerator
 from lexer.lexer import Lexer
 from parser.parser import Parser
 from errors import HanError
-from block_editor import BlockEditor
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -1002,7 +1001,6 @@ class HanIDE:
         self.last_python_code = ""
 
         self.mode = "텍스트 코딩"
-        self.block_editor = None
 
         self._build_styles()
         self._build_menu()
@@ -1090,9 +1088,6 @@ class HanIDE:
 
             ttk.Button(self.toolbar, text = label, command=command).pack(side=LEFT,padx=(0,6))
 
-        self.mode_button = ttk.Button(self.toolbar,text="블록 모드", command=self.toggle_mode)
-        self.mode_button.pack(side=LEFT, padx=(0,6))
-
         self.main_pane = ttk.PanedWindow(self.root, orient=HORIZONTAL)
         self.main_pane.pack(side=TOP, fill=BOTH, expand=True)
 
@@ -1101,9 +1096,6 @@ class HanIDE:
 
         self.notebook = ttk.Notebook(self.editor_pane)
         self.editor_pane.add(self.notebook, weight=5)
-
-        self.block_editor = BlockEditor(self.editor_pane, self)
-        self.block_editor.pack_forget()
 
         self.notebook.bind("<<NotebookTabChanged>>", lambda _event: self.update_status())
 
@@ -1285,55 +1277,8 @@ class HanIDE:
             "ok"
         )
 
-    def toggle_mode(self) -> None:
-        tab = self.current_tab()
 
-        if tab is None:
-            return
 
-        if self.mode == "텍스트 코딩":
-            source = tab.content()
-
-            try:
-                self.block_editor.load_han(source)
-
-            except Exception as error:
-                self.write_console(
-                    f"블록 변환 오류: {error}\n",
-                    "error"
-                )
-                return
-
-            self.notebook.pack_forget()
-            self.block_editor.pack(
-                fill=BOTH,
-                expand=True
-            )
-
-            self.mode = "블록 코딩"
-            self.mode_button.configure(
-                text="텍스트 모드"
-            )
-
-        else:
-            source = self.block_editor.to_han()
-
-            tab.text.delete("1.0", END)
-            tab.text.insert("1.0", source)
-            tab.mark_clean()
-
-            self.block_editor.pack_forget()
-            self.notebook.pack(
-                fill=BOTH,
-                expand=True
-            )
-
-            self.mode = "텍스트 코딩"
-            self.mode_button.configure(
-                text="블록 모드"
-            )
-
-        self.update_status()
     
     def run_current(self) -> None:
         tab = self.current_tab()
@@ -1448,7 +1393,7 @@ class HanIDE:
                     str(wrapper_file)
                 ],
                 cwd=str(self.workspace),
-                creationflags=subprocess.CREATE_NEW_CONSOLE
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
             )
 
         except OSError as error:
@@ -1457,11 +1402,6 @@ class HanIDE:
                 str(error)
             )
             return
-
-        self.write_console(
-            "프로그램을 실행했습니다.\n",
-            "ok"
-        )
 
     def run_han(self) -> None:
         source = self.editor.get("1.0", END)
@@ -1491,9 +1431,35 @@ class HanIDE:
 
         self.write_console("실행 중...\n", "info")
 
+        def safe_input(prompt: str = "") -> str:
+            if prompt:
+                print(prompt, end="", flush=True)
+
+            if sys.stdin is None or getattr(sys.stdin, "closed", False):
+                return ""
+
+            if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+                try:
+                    return input(prompt)
+                except EOFError:
+                    return ""
+
+            try:
+                line = sys.stdin.readline()
+            except (EOFError, OSError):
+                return ""
+
+            if line == "":
+                return ""
+
+            return line.rstrip("\r\n")
+
         try:
+            builtins_dict = dict(__builtins__.__dict__ if isinstance(__builtins__, dict) else vars(__builtins__))
+            builtins_dict["input"] = safe_input
             namespace = {
-                "__name__": "__main__"
+                "__name__": "__main__",
+                "__builtins__": builtins_dict,
             }
 
             exec(python_code, namespace)

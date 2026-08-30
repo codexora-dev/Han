@@ -1,9 +1,34 @@
-from pathlib import Path
+import builtins
 import sys
+from pathlib import Path
 
 from compiler.codegen.python import PythonCodeGenerator
 from lexer.lexer import Lexer
 from parser.parser import Parser
+
+
+def safe_input(prompt: str = "") -> str:
+    if prompt:
+        print(prompt, end="", flush=True)
+
+    if sys.stdin is None or getattr(sys.stdin, "closed", False):
+        return ""
+
+    if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+        try:
+            return input(prompt)
+        except EOFError:
+            return ""
+
+    try:
+        line = sys.stdin.readline()
+    except (EOFError, OSError):
+        return ""
+
+    if line == "":
+        return ""
+
+    return line.rstrip("\r\n")
 
 
 def compile_file(path: str) -> str:
@@ -38,7 +63,10 @@ def main() -> None:
     try:
         python_code = compile_file(source_path)
         if should_run:
-            exec(python_code, {})
+            builtins_dict = dict(builtins.__dict__)
+            builtins_dict["input"] = safe_input
+            ns = {"__name__": "__main__", "__builtins__": builtins_dict}
+            exec(python_code, ns)
         else:
             print(python_code)
     except Exception as error:
