@@ -12,6 +12,7 @@ from parser.nodes import (
     UnaryOpNode,
     VarAssignNode,
 )
+from errors import HanCompilerError
 
 
 class PythonCodeGenerator:
@@ -92,7 +93,9 @@ class PythonCodeGenerator:
 
             return lines
 
-        raise TypeError(f"지원하지 않는 AST 노드입니다: {type(node).__name__}")
+        raise HanCompilerError(
+            f"지원하지 않는 AST 노드입니다: {type(node).__name__}"
+        )
 
     def generate_body(self, statements: list, indent: int) -> list[str]:
         if not statements:
@@ -128,4 +131,6 @@ class PythonCodeGenerator:
             right = self.generate_expression(node.right)
             return f"({left} {operator} {right})"
 
-        raise TypeError(f"지원하지 않는 표현식 노드입니다: {type(node).__name__}")
+        raise HanCompilerError(
+            f"지원하지 않는 표현식 노드입니다: {type(node).__name__}"
+        )

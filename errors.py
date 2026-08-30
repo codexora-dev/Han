@@ -4,14 +4,14 @@ class HanError(Exception):
         message,
         line=None,
         column=None,
-        source=None,
+        source_line=None,
         error_code="H0000",
-        error_type="오류"
+        error_type="오류",
     ):
         self.message = message
         self.line = line
         self.column = column
-        self.source = source
+        self.source_line = source_line
         self.error_code = error_code
         self.error_type = error_type
         super().__init__(message)
@@ -25,76 +25,81 @@ class HanError(Exception):
             f"│ 오류 종류: {self.error_type}",
         ]
 
-        if self.source:
-            lines.append(f"│ 파일: {self.source}")
-
         if self.line is not None:
             location = f"{self.line}행"
             if self.column is not None:
                 location += f" {self.column}열"
             lines.append(f"│ 위치: {location}")
 
-        lines.append("│")
-
         if self.source_line:
+            lines.append("│")
             lines.append(f"│ {self.line} │ {self.source_line}")
 
             if self.column is not None:
-                pointer = " " * max(0, self.column - 1) + "^"
-                lines.append(f"│     │ {pointer}")
+                pointer = " " * (self.column + 4) + "^"
+                lines.append(f"│     {pointer}")
 
         lines.extend([
             "│",
             f"│ {self.message}",
             "│",
-            "└────────────────────────────────────────"
+            "│ 이 오류 메시지를 복사하여 Han 커뮤니티에",
+            "│ 질문하면 문제 해결에 도움을 받을 수 있습니다.",
+            "└────────────────────────────────────────",
         ])
 
         return "\n".join(lines)
 
-    @property
-    def source_line(self):
-        return getattr(self, "_source_line", None)
-
-    def set_source_line(self, source_line):
-        self._source_line = source_line
-        return self
-
 
 class HanLexerError(HanError):
-    def __init__(self, message, line=None, column=None, source=None, source_line=None):
+    def __init__(
+        self,
+        message,
+        line=None,
+        column=None,
+        source_line=None,
+    ):
         super().__init__(
             message,
             line,
             column,
-            source,
-            error_code="H1000",
-            error_type="문법 분석 오류"
+            source_line,
+            "H1000",
+            "어휘 분석 오류",
         )
-        self._source_line = source_line
 
 
 class HanParserError(HanError):
-    def __init__(self, message, line=None, column=None, source=None, source_line=None):
+    def __init__(
+        self,
+        message,
+        line=None,
+        column=None,
+        source_line=None,
+    ):
         super().__init__(
             message,
             line,
             column,
-            source,
-            error_code="H2000",
-            error_type="구문 오류"
+            source_line,
+            "H2000",
+            "구문 분석 오류",
         )
-        self._source_line = source_line
 
 
 class HanCompilerError(HanError):
-    def __init__(self, message, line=None, column=None, source=None, source_line=None):
+    def __init__(
+        self,
+        message,
+        line=None,
+        column=None,
+        source_line=None,
+    ):
         super().__init__(
             message,
             line,
             column,
-            source,
-            error_code="H3000",
-            error_type="컴파일 오류"
+            source_line,
+            "H3000",
+            "컴파일 오류",
         )
-        self._source_line = source_line

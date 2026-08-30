@@ -1,4 +1,5 @@
 from lexer.lexer import Token
+from errors import HanParserError
 from parser.nodes import (
     BinaryOpNode,  ## 이항 연산
     FunctionCallNode, ## 함수 호출
@@ -56,7 +57,12 @@ class Parser:
         if token.type == "IDENTIFIER" and self.peek().type == "LPAREN":
             return self.parse_function_call()
 
-        self.error(token, f"예상하지 못한 토큰입니다: {token.value}")
+        def error(self, token, message):
+            raise HanParserError(
+                message,
+                line=token.line,
+                column=token.column,
+            )
 
     def parse_print(self) -> PrintNode:
         self.advance()

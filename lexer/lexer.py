@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-
+from errors import HanLexerError
 
 @dataclass
 class Token:
@@ -102,7 +102,14 @@ class Lexer:
                 self._advance()
                 continue
 
-            raise SyntaxError(f"{self.line}행 {self.column}열: 알 수 없는 문자입니다: {char}")
+            raise HanLexerError(
+                f"알 수 없는 문자입니다: {char}",
+                line=self.line,
+                column=self.column,
+                source_line=self.source.splitlines()[self.line - 1]
+                if self.line <= len(self.source.splitlines())
+                else None,
+            )
 
         self.tokens.append(Token("EOF", "", self.line, self.column))
         return self.tokens
@@ -117,16 +124,37 @@ class Lexer:
             char = self._advance()
             if char == "\\":
                 if self._is_at_end():
-                    raise SyntaxError(f"{start_line}행 {start_column}열: 문자열이 끝나지 않았습니다.")
+                    raise HanLexerError(
+                        "문자열이 끝나지 않았습니다.",
+                        line=start_line,
+                        column=start_column,
+                        source_line=self.source.splitlines()[start_line - 1]
+                        if start_line <= len(self.source.splitlines())
+                        else None,
+                    )
                 escaped = self._advance()
                 value.append({"n": "\n", "t": "\t", '"': '"', "\\": "\\"}.get(escaped, escaped))
             elif char == "\n":
-                raise SyntaxError(f"{start_line}행 {start_column}열: 문자열은 한 줄 안에서 닫아야 합니다.")
+                raise HanLexerError(
+                    "문자열은 한 줄 안에서 닫아야 합니다.",
+                    line=start_line,
+                    column=start_column,
+                    source_line=self.source.splitlines()[start_line - 1]
+                    if start_line <= len(self.source.splitlines())
+                    else None,
+                )
             else:
                 value.append(char)
 
         if self._is_at_end():
-            raise SyntaxError(f"{start_line}행 {start_column}열: 문자열이 끝나지 않았습니다.")
+            raise HanLexerError(
+                "문자열이 끝나지 않았습니다.",
+                line=start_line,
+                column=start_column,
+                source_line=self.source.splitlines()[start_line - 1]
+                if start_line <= len(self.source.splitlines())
+                else None,
+            )
 
         self._advance()
         self.tokens.append(Token("STRING", "".join(value), start_line, start_column))
