@@ -52,3 +52,44 @@ exe = EXE(
     entitlements_file=None,
     icon="assets/icon/Han_Logo.ico",
 )
+
+
+runtime_a = Analysis(
+    ["IDE/runtime.py"],
+    pathex=["."],
+    binaries=[],
+    datas=[],
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+
+
+runtime_pyz = PYZ(runtime_a.pure)
+
+
+runtime_exe = EXE(
+    runtime_pyz,
+    runtime_a.scripts,
+    runtime_a.binaries,
+    runtime_a.datas,
+    [],
+    name="HanRuntime",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon="assets/icon/Han_Logo.ico",
+)

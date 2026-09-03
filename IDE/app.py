@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import threading
@@ -11,6 +12,27 @@ import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
+
+
+def _run_frozen_runtime() -> None:
+    if not getattr(sys, "frozen", False) or len(sys.argv) < 3 or sys.argv[1] != "--han-runtime":
+        return
+
+    try:
+        source = base64.b64decode(sys.argv[2]).decode("utf-8")
+        exec(compile(source, "<han>", "exec"), {"__name__": "__main__"})
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+    finally:
+        try:
+            input("\n실행이 종료되었습니다. Enter 키를 누르면 창이 닫힙니다.")
+        except (EOFError, OSError, RuntimeError):
+            pass
+        raise SystemExit(0)
+
+
+_run_frozen_runtime()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -117,6 +139,20 @@ STRING_PATTERN = re.compile(r'"(?:\\.|[^"\\])*"')
 NUMBER_PATTERN = re.compile(r"(?<![\w가-힣])\d+(?:\.\d+)?(?![\w가-힣])")
 COMMENT_PATTERN = re.compile(r"(#.*|//.*)$")
 OPERATOR_PATTERN = re.compile(r"(==|!=|<=|>=|[+\-*/%=<>])")
+
+
+class QueueStream:
+    def __init__(self, output_queue: queue.Queue, stream_type: str):
+        self.output_queue = output_queue
+        self.stream_type = stream_type
+
+    def write(self, text: str) -> int:
+        if text:
+            self.output_queue.put((self.stream_type, text))
+        return len(text)
+
+    def flush(self) -> None:
+        return None
 
 
 def choose_font(preferred: list[str]) -> str:
@@ -998,6 +1034,8 @@ class HanIDE:
         self.workspace = Path(self.settings.han_root)
 
         self.process: subprocess.Popen | None = None
+        self.in_process_run = False
+        self.console_input_active = False
         self.output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self.console_input_start = "1.0"
         self.last_python_code = ""
@@ -1316,51 +1354,42 @@ class HanIDE:
 
         self.clear_console()
         self.console.configure(state="normal")
-        self.console.insert(END, "터미널에서 실행 중...\n", "muted")
+        self.console.insert(END, "콘솔에서 실행 중...\n", "muted")
         self.console.configure(state="disabled")
         self.console_input_start = self.console.index("end-1c")
+        self.console.mark_set("insert", self.console_input_start)
 
-        try:
-            creation_flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-            runtime_code = (
-                "import os, sys, threading, traceback\n"
-                "def _han_run():\n"
-                "    try:\n"
-                f"        exec(compile({python_code!r}, '<han>', 'exec'), {{'__name__': '__main__'}})\n"
-                "    except BaseException:\n"
-                "        traceback.print_exc()\n"
-                "_han_thread = threading.Thread(target=_han_run, daemon=True)\n"
-                "_han_thread.start()\n"
-                "_han_thread.join(30)\n"
-                "if _han_thread.is_alive():\n"
-                "    print('오류: 실행 시간이 너무 오래 걸렸습니다. 프로그램을 종료합니다.', file=sys.stderr, flush=True)\n"
-                "    raise SystemExit(1)\n"
-                "input('\\n실행이 종료되었습니다. Enter 키를 누르면 창이 닫힙니다.')\n"
-                "sys.stdout.flush()\n"
-                "os._exit(0)\n"
-            )
-            self.process = subprocess.Popen(
-                [sys.executable, "-u", "-c", runtime_code],
-                creationflags=creation_flags,
-            )
-        except Exception as error:
-            self.console.configure(state="normal")
-            self.console.insert(END, f"\n실행 시작 실패: {error}\n", "error")
-            self.console.configure(state="disabled")
-            self.process = None
-            return
+        self.in_process_run = True
+        self._process_output_loop()
 
-        process = self.process
+        def execute_code() -> None:
+            input_queue = self.console_input_queue
 
-        def watch_process() -> None:
+            def han_input(prompt: str = "") -> str:
+                self.output_queue.put(("input_prompt", prompt))
+                if input_queue is None:
+                    return ""
+                return input_queue.get()
+
             try:
-                process.wait()
+                import builtins
+                builtins_dict = vars(builtins).copy()
+                builtins_dict["input"] = han_input
+                namespace = {
+                    "__name__": "__main__",
+                    "__builtins__": builtins_dict,
+                }
+                with redirect_stdout(QueueStream(self.output_queue, "stdout")), redirect_stderr(
+                    QueueStream(self.output_queue, "stderr")
+                ):
+                    exec(python_code, namespace)
+            except BaseException:
+                import traceback
+                traceback.print_exc(file=QueueStream(self.output_queue, "stderr"))
             finally:
-                if self.process is process and process.poll() is not None:
-                    self.root.after(0, self._finalize_console_run)
-                    self.process = None
+                self.root.after(0, self._finish_in_process_run)
 
-        threading.Thread(target=watch_process, daemon=True).start()
+        threading.Thread(target=execute_code, daemon=True).start()
 
     def _finalize_console_run(self) -> None:
         self.console_input_queue = None
@@ -1369,6 +1398,32 @@ class HanIDE:
         self.console.insert(END, "\n실행 종료\n", "muted")
         self.console.configure(state="disabled")
         self.console_input_start = self.console.index("end-1c")
+        self.console.mark_set("insert", self.console_input_start)
+        self.console.see(END)
+
+    def _finish_in_process_run(self) -> None:
+        self._process_output_loop()
+        if not self.output_queue.empty():
+            self.root.after(30, self._finish_in_process_run)
+            return
+
+        self.in_process_run = False
+        self.console_input_active = False
+        self.console_input_queue = None
+        self.console.configure(state="normal")
+        self.console.insert(END, "\n실행 종료\n", "muted")
+        self.console.configure(state="disabled")
+        self.console_input_start = self.console.index("end-1c")
+        self.console.mark_set("insert", self.console_input_start)
+        self.console.see(END)
+
+    def _enable_console_input(self) -> None:
+        if not self.in_process_run:
+            return
+
+        self.console.configure(state="normal")
+        self.console_input_start = self.console.index("end-1c")
+        self.console_input_active = True
         self.console.mark_set("insert", self.console_input_start)
         self.console.see(END)
 
@@ -1560,7 +1615,7 @@ class HanIDE:
         self.console.insert(END, text, tag)
         self.console.see(END)
 
-        if self.process is None:
+        if not self.console_input_active:
             self.console.configure(state="disabled")
     
     def update_status(self) -> None:
@@ -1809,7 +1864,7 @@ class HanIDE:
         )
 
     def _console_key(self, event):
-        if self.process is None:
+        if not self.console_input_active:
             return
 
         try:
@@ -1854,7 +1909,7 @@ class HanIDE:
 
 
     def _console_backspace(self, event=None):
-        if self.process is None:
+        if not self.console_input_active:
             return "break"
 
         try:
@@ -1873,7 +1928,7 @@ class HanIDE:
         return None
 
     def _console_enter(self, event=None):
-        if self.process is None and self.console_input_queue is None:
+        if not self.console_input_active:
             return "break"
 
         try:
@@ -1883,6 +1938,8 @@ class HanIDE:
             )
 
             self.console.insert("end", "\n")
+            self.console_input_active = False
+            self.console.configure(state="disabled")
 
             if self.console_input_queue is not None:
                 self.console_input_queue.put(user_input)
@@ -2011,6 +2068,10 @@ class HanIDE:
                 if stream_type == "stdout":
                     self.write_console(text, "ok")
 
+                elif stream_type == "input_prompt":
+                    self.write_console(text, "ok")
+                    self._enable_console_input()
+
                 elif stream_type == "stderr":
                     self.write_console(self.convert_python_error(text),"error")
 
@@ -2020,7 +2081,7 @@ class HanIDE:
         except queue.Empty:
             pass
 
-        if self.process is not None or not self.output_queue.empty():
+        if self.process is not None or self.in_process_run or not self.output_queue.empty():
             self.root.after(30, self._process_output_loop)
 
     def _wait_process(
