@@ -1,38 +1,16 @@
 from __future__ import annotations
 
-import base64
 import json
 import os
 import threading
 import queue
 import re
 import shutil
-import subprocess
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
 
-
-def _run_frozen_runtime() -> None:
-    if not getattr(sys, "frozen", False) or len(sys.argv) < 3 or sys.argv[1] != "--han-runtime":
-        return
-
-    try:
-        source = base64.b64decode(sys.argv[2]).decode("utf-8")
-        exec(compile(source, "<han>", "exec"), {"__name__": "__main__"})
-    except BaseException:
-        import traceback
-        traceback.print_exc()
-    finally:
-        try:
-            input("\n실행이 종료되었습니다. Enter 키를 누르면 창이 닫힙니다.")
-        except (EOFError, OSError, RuntimeError):
-            pass
-        raise SystemExit(0)
-
-
-_run_frozen_runtime()
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1033,7 +1011,6 @@ class HanIDE:
         self.palette = THEMES[self.settings.theme if self.settings.theme in THEMES else "Han Dark"]
         self.workspace = Path(self.settings.han_root)
 
-        self.process: subprocess.Popen | None = None
         self.in_process_run = False
         self.console_input_active = False
         self.output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
@@ -1391,16 +1368,6 @@ class HanIDE:
 
         threading.Thread(target=execute_code, daemon=True).start()
 
-    def _finalize_console_run(self) -> None:
-        self.console_input_queue = None
-        self.process = None
-        self.console.configure(state="normal")
-        self.console.insert(END, "\n실행 종료\n", "muted")
-        self.console.configure(state="disabled")
-        self.console_input_start = self.console.index("end-1c")
-        self.console.mark_set("insert", self.console_input_start)
-        self.console.see(END)
-
     def _finish_in_process_run(self) -> None:
         self._process_output_loop()
         if not self.output_queue.empty():
@@ -1426,80 +1393,6 @@ class HanIDE:
         self.console_input_active = True
         self.console.mark_set("insert", self.console_input_start)
         self.console.see(END)
-
-    def run_han(self) -> None:
-        source = self.editor.get("1.0", END)
-
-        if not source.strip():
-            self.write_console("실행할 코드가 없습니다.\n", "error")
-            return
-
-        self.clear_console()
-
-        try:
-            python_code = self.compile_source_to_python(source)
-
-        except HanError as error:
-            self.write_console(
-                error.format() + "\n",
-                "error"
-            )
-            return
-
-        except Exception as error:
-            self.write_console(
-                f"Han 내부 오류: {error}\n",
-                "error"
-            )
-            return
-
-        self.write_console("실행 중...\n", "info")
-
-        def safe_input(prompt: str = "") -> str:
-            if prompt:
-                print(prompt, end="", flush=True)
-
-            if sys.stdin is None or getattr(sys.stdin, "closed", False):
-                return ""
-
-            if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
-                try:
-                    return input(prompt)
-                except EOFError:
-                    return ""
-
-            try:
-                line = sys.stdin.readline()
-            except (EOFError, OSError):
-                return ""
-
-            if line == "":
-                return ""
-
-            return line.rstrip("\r\n")
-
-        try:
-            builtins_dict = dict(__builtins__.__dict__ if isinstance(__builtins__, dict) else vars(__builtins__))
-            builtins_dict["input"] = safe_input
-            namespace = {
-                "__name__": "__main__",
-                "__builtins__": builtins_dict,
-            }
-
-            exec(python_code, namespace)
-
-        except HanError as error:
-            self.write_console(
-                error.format() + "\n",
-                "error"
-            )
-
-        except Exception as error:
-            self.write_console(
-                f"실행 오류: {error}\n",
-                "error"
-            )
-
 
     def find_text(self) -> None:
         tab = self.current_tab()
@@ -1535,59 +1428,6 @@ class HanIDE:
 
     def open_settings(self) -> None:
         SettingsDialog(self)
-
-    def compile_source_to_python(self, source: str) -> str:
-        tokens = Lexer(source).tokenize()
-        ast = Parser(tokens).parse()
-        return PythonCodeGenerator().generate(ast)
-
-
-    def show_python_code(self) -> None:
-        tab = self.current_tab()
-
-        if tab is None:
-            return
-
-        source = tab.content()
-
-        try:
-            python_code = self.compile_source_to_python(source)
-
-        except HanError as error:
-            self.write_console(
-                error.format() + "\n",
-                "error"
-            )
-            return
-
-        except Exception as error:
-            self.write_console(
-                f"Han 내부 오류: {error}\n",
-                "error"
-            )
-            return
-
-        self.last_python_code = python_code
-
-        window = tk.Toplevel(self.root)
-        window.title("생성된 Python 코드")
-        window.geometry("850x650")
-
-        frame = ttk.Frame(window, padding=10)
-        frame.pack(fill=BOTH, expand=True)
-
-        text = tk.Text(
-            frame,
-            wrap="none",
-            borderwidth=0,
-            highlightthickness=0,
-            font=("Cascadia Mono", 12),
-        )
-
-        text.pack(fill=BOTH, expand=True)
-
-        text.insert("1.0", python_code)
-        text.configure(state="disabled")
 
     def clear_console(self) -> None:
         self.console.configure(state="normal")
@@ -1943,9 +1783,6 @@ class HanIDE:
 
             if self.console_input_queue is not None:
                 self.console_input_queue.put(user_input)
-            elif self.process is not None and getattr(self.process, "stdin", None) is not None:
-                self.process.stdin.write(user_input + "\n")
-                self.process.stdin.flush()
 
             self.console_input_start = self.console.index("end-1c")
             self.console.mark_set("insert", self.console_input_start)
@@ -1961,35 +1798,6 @@ class HanIDE:
         return "break"
                 
             
-    def _read_process_output(
-            self,
-            stream,
-            stream_type: str
-        ) -> None:
-
-        if stream is None:
-            return
-
-        try:
-            while True:
-                char = stream.read(1)
-
-                if char == "":
-                    break
-
-                self.output_queue.put(
-                    (stream_type, char)
-                )
-
-        except (ValueError, OSError):
-            pass
-
-        finally:
-            try:
-                stream.close()
-            except Exception:
-                pass
-
     def convert_python_error(self, text: str) -> str:
         if not text.strip():
             return ""
@@ -2075,99 +1883,24 @@ class HanIDE:
                 elif stream_type == "stderr":
                     self.write_console(self.convert_python_error(text),"error")
 
-                elif stream_type == "process":
-                    self.write_console(text, "muted")
-
         except queue.Empty:
             pass
 
-        if self.process is not None or self.in_process_run or not self.output_queue.empty():
+        if self.in_process_run or not self.output_queue.empty():
             self.root.after(30, self._process_output_loop)
-
-    def _wait_process(
-            self,
-            process: subprocess.Popen
-        ) -> None:
-
-        returncode = process.wait()
-
-        # stdout/stderr 읽기 스레드가 큐에 넣은 내용을
-        # 먼저 처리할 수 있도록 종료 메시지를 마지막에 넣는다.
-        self.output_queue.put(
-            (
-                "process",
-                f"\n종료 코드: {returncode}\n"
-            )
-        )
-
-        self.root.after(
-            0,
-            self._process_finished,
-            process
-        )
-
-    def _process_finished(
-            self,
-            process: subprocess.Popen
-        ) -> None:
-
-        if self.process is not process:
-            return
-
-        returncode = process.returncode
-
-        # 프로세스 자체는 종료됐지만
-        # stdout/stderr 큐에 남은 데이터가 있을 수 있다.
-        self.root.after(
-            100,
-            self._finish_process,
-            process,
-            returncode
-        )
-
-    def _finish_process(
-            self,
-            process: subprocess.Popen,
-            returncode: int | None
-        ) -> None:
-
-        if self.process is not process:
-            return
-
-        # 남아 있는 stdout/stderr 출력 처리
-        self._process_output_loop()
-
-        self.process = None
-
-        self.current_run_source = ""
-        self.current_run_file = None
-
-        self.console.configure(state="disabled")
-        self.console_input_start = self.console.index("end-1c")
-
     def stop_process(self) -> None:
-        process = self.process
-
-        if process is None:
+        if not self.in_process_run:
             self.write_console(
                 "실행 중인 프로그램이 없습니다.\n",
                 "muted"
             )
             return
 
-        self.process = None
-
-        try:
-            if isinstance(process, subprocess.Popen) and process.stdin is not None:
-                process.stdin.close()
-        except OSError:
-            pass
-
-        try:
-            process.terminate()
-        except OSError:
-            pass
-
+        self.in_process_run = False
+        self.console_input_active = False
+        if self.console_input_queue is not None:
+            self.console_input_queue.put("")
+        self.console_input_queue = None
         self.console.configure(state="disabled")
         self.console_input_start = self.console.index("end-1c")
 
