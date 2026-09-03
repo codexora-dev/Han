@@ -1032,6 +1032,7 @@ class HanIDE:
             self.show_welcome_message()
             self.settings.first_run = False
 
+        self.root.after(100, self.focus_editor)
         
 
 
@@ -1191,6 +1192,18 @@ class HanIDE:
     def open_start_file(self) -> None:
         self.new_file()
 
+    def focus_editor(self) -> None:
+        tab = self.current_tab()
+        if tab is not None:
+            try:
+                self.root.deiconify()
+                self.root.lift()
+                self.root.focus_force()
+                tab.text.focus_force()
+                tab.text.mark_set("insert", "insert")
+            except tk.TclError:
+                pass
+
     def load_workspace(self, path: Path) -> None:
         self.workspace = path
         self.settings.han_root = str(path)
@@ -1199,7 +1212,7 @@ class HanIDE:
         tab = EditorTab(self.notebook, self)
         self.notebook.add(tab, text=tab.title)
         self.notebook.select(tab)
-        tab.text.focus_set()
+        self.root.after_idle(self.focus_editor)
         return tab
 
     def open_learning(self) -> None:
@@ -1218,6 +1231,7 @@ class HanIDE:
         for tab in self.tabs():
             if tab.path and tab.path.resolve() == path.resolve():
                 self.notebook.select(tab)
+                self.root.after_idle(self.focus_editor)
                 return
 
         try:
@@ -1233,7 +1247,7 @@ class HanIDE:
         self.notebook.add(tab, text=tab.title)
         self.notebook.select(tab)
         tab.mark_clean()
-        tab.text.focus_set()
+        self.root.after_idle(self.focus_editor)
 
     def save_current(self) -> bool:
         tab = self.current_tab()
