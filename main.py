@@ -1,4 +1,6 @@
 import builtins
+import ctypes
+import os
 import sys
 from pathlib import Path
 
@@ -7,22 +9,35 @@ from lexer.lexer import Lexer
 from parser.parser import Parser
 
 
-def safe_input(prompt: str = "") -> str:
-    if prompt:
-        print(prompt, end="", flush=True)
+def _has_interactive_stdin() -> bool:
+    if sys.stdin is None or getattr(sys.stdin, "closed", False):
+        return False
 
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            mode = ctypes.c_uint()
+            handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+            return bool(ctypes.windll.kernel32.GetConsoleMode(handle, ctypes.byref(mode)))
+        return sys.stdin.isatty()
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def safe_input(prompt: str = "") -> str:
     if sys.stdin is None or getattr(sys.stdin, "closed", False):
         return ""
 
-    if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+    if _has_interactive_stdin():
         try:
             return input(prompt)
-        except EOFError:
+        except (EOFError, OSError, RuntimeError):
             return ""
 
     try:
         line = sys.stdin.readline()
-    except (EOFError, OSError):
+    except (EOFError, OSError, RuntimeError):
         return ""
 
     if line == "":
