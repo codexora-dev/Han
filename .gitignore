@@ -1,0 +1,8 @@
+dist/
+.han_temp/
+__pycache___/
+build/
+dist/
+HanIDE.spec
+IDE/settings.json
+IDE/run.bat
